@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Minimal LIFF Push (GitHub Pages)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- LIFF SDK -->
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        padding: 16px;
+      }
+      button {
+        padding: 10px 16px;
+        margin: 6px 6px 6px 0;
+      }
+      #log {
+        white-space: pre-wrap;
+        background: #f7f7f7;
+        padding: 10px;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Minimal LIFF Push</h1>
+    <div>
+      <button id="btnInit">LIFF init</button>
+      <button id="btnPush">Push via GAS</button>
+      <button id="btnLogout">Logout</button>
+    </div>
+    <h3>Log</h3>
+    <div id="log"></div>
+
+    <script>
+      // ========= 差し替えポイント =========
+      const LIFF_ID = "1660880261-zrokgWLA"; // 例: '1660880261-zrokgWLA'（開いているLIFFと一致必須）
+      const GAS_ENDPOINT =
+        "https://script.google.com/macros/s/AKfycbxFPWM7XlrsQP8v3ajJQGEZy13LqPd1xRUsEclLyB5uyI2mDSzNVxmQjGbwxV56Rr2fLA/exec"; // 例: 'https://script.google.com/macros/s/xxxxxxxx/exec'
+      // ====================================
+
+      const log = (...args) => {
+        const el = document.getElementById("log");
+        el.textContent +=
+          args
+            .map((a) =>
+              typeof a === "string" ? a : JSON.stringify(a, null, 2)
+            )
+            .join(" ") + "\n";
+      };
+
+      async function ensureScopes() {
+        try {
+          const granted = await liff.getGrantedScopes();
+          log("granted scopes:", granted);
+          const s = granted?.scopes ?? [];
+          const need = [];
+          if (!s.includes("profile")) need.push("profile");
+          if (!s.includes("openid")) need.push("openid"); // id_token を取得するため
+          if (need.length) {
+            log("requesting scopes:", need.join(","));
+            await liff.login({ scope: need, prompt: "consent" });
+            return false; // ここで遷移→復帰後に window.load で init 再実行
+          }
+          return true;
+        } catch (e) {
+          log("getGrantedScopes error:", e);
+          throw e;
+        }
+      }
+
+      async function initLiff() {
+        log("current href BEFORE init:", location.href);
+        try {
+          await liff.init({ liffId: LIFF_ID });
+          log("liff.init OK, inClient:", liff.isInClient());
+        } catch (e) {
+          log("liff.init error:", e);
+          alert("liff.init error: " + (e?.message || e));
+          return;
+        }
+
+        if (!liff.isLoggedIn()) {
+          log("not logged-in → login");
+          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
+          return;
+        }
+
+        const ok = await ensureScopes();
+        if (!ok) return;
+
+        log("LIFF ready with required scopes");
+      }
+
+      document.getElementById("btnInit").onclick = initLiff;
+
+      document.getElementById("btnPush").onclick = async () => {
+        try {
+          // 念のため
+          if (!liff.isLoggedIn()) {
+            await liff.login({
+              scope: ["profile", "openid"],
+              prompt: "consent",
+            });
+            return;
+          }
+          const ok = await ensureScopes();
+          if (!ok) return;
+
+          // ★ ここがポイント：id_token をサーバへ送る（userIdは送らない）
+          const idToken = liff.getIDToken();
+          if (!idToken) {
+            alert("idToken not found.");
+            return;
+          }
+
+          const text = "GAS経由のプッシュ送信テストだよ！";
+          const body = new URLSearchParams({
+            id_token: idToken,
+            text,
+          }).toString();
+
+          const res = await fetch(GAS_ENDPOINT, {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/x-www-form-urlencoded; charset=UTF-8",
+            },
+            body,
+          });
+          log("GAS status:", res.status, await res.text());
+          alert("GAS status: " + res.status);
+        } catch (e) {
+          log("push error:", e);
+          alert("push error: " + (e?.message || e));
+        }
+      };
+
+      document.getElementById("btnLogout").onclick = () => {
+        liff.logout();
+        location.reload();
+      };
+
+      // 復帰時に自動初期化
+      window.addEventListener("load", initLiff);
+    </script>
+  </body>
+</html>
