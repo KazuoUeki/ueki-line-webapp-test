@@ -50,68 +50,55 @@
             .join(" ") + "\n";
       };
 
-      async function ensureScopes() {
-        try {
-          const granted = await liff.getGrantedScopes();
-          log("granted scopes:", granted);
-          const s = granted?.scopes ?? [];
-          const need = [];
-          if (!s.includes("profile")) need.push("profile");
-          if (!s.includes("openid")) need.push("openid"); // id_token を取得するため
-          if (need.length) {
-            log("requesting scopes:", need.join(","));
-            await liff.login({ scope: need, prompt: "consent" });
-            return false; // ここで遷移→復帰後に window.load で init 再実行
-          }
-          return true;
-        } catch (e) {
-          log("getGrantedScopes error:", e);
-          throw e;
+      async function ensureLoginWithScopes() {
+        // 1) init
+        await liff.init({ liffId: LIFF_ID });
+
+        // 2) 未ログインなら必要スコープを要求してログイン
+        if (!liff.isLoggedIn()) {
+          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
+          return false; // リダイレクト→復帰後にもう一度呼ばれる想定
         }
+
+        // 3) ログイン済みでも idToken が無ければ再同意を促す
+        const idToken = liff.getIDToken();
+        if (!idToken) {
+          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
+          return false;
+        }
+
+        // 4) profile スコープの確認は getProfile を try して判定
+        try {
+          await liff.getProfile(); // 成功すれば profile スコープあり
+        } catch (_) {
+          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
+          return false;
+        }
+        return true;
       }
 
       async function initLiff() {
-        log("current href BEFORE init:", location.href);
+        log("href(before init):", location.href);
         try {
-          await liff.init({ liffId: LIFF_ID });
-          log("liff.init OK, inClient:", liff.isInClient());
+          const ready = await ensureLoginWithScopes();
+          if (!ready) return; // ログイン/同意で遷移→復帰後に再実行
+          log("LIFF ready (logged-in & scopes ok).");
         } catch (e) {
-          log("liff.init error:", e);
-          alert("liff.init error: " + (e?.message || e));
-          return;
+          log("init error:", e?.message || e);
+          alert("init error: " + (e?.message || e));
         }
-
-        if (!liff.isLoggedIn()) {
-          log("not logged-in → login");
-          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
-          return;
-        }
-
-        const ok = await ensureScopes();
-        if (!ok) return;
-
-        log("LIFF ready with required scopes");
       }
 
       document.getElementById("btnInit").onclick = initLiff;
 
       document.getElementById("btnPush").onclick = async () => {
         try {
-          // 念のため
-          if (!liff.isLoggedIn()) {
-            await liff.login({
-              scope: ["profile", "openid"],
-              prompt: "consent",
-            });
-            return;
-          }
-          const ok = await ensureScopes();
-          if (!ok) return;
+          const ready = await ensureLoginWithScopes();
+          if (!ready) return;
 
-          // ★ ここがポイント：id_token をサーバへ送る（userIdは送らない）
           const idToken = liff.getIDToken();
           if (!idToken) {
-            alert("idToken not found.");
+            alert("idToken not found");
             return;
           }
 
@@ -129,6 +116,7 @@
             },
             body,
           });
+
           log("GAS status:", res.status, await res.text());
           alert("GAS status: " + res.status);
         } catch (e) {
