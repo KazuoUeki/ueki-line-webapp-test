@@ -5,6 +5,7 @@
   body {
     font: 14px/1.6 system-ui, sans-serif;
     margin: 12px;
+    overflow: hidden; /* スクロールバー抑止 */
   }
   .row {
     display: grid;
@@ -15,9 +16,8 @@
     width: 100%;
     box-sizing: border-box;
   }
-  /* img{ max-width:100%; height:auto; display:block; border:1px solid #ddd; border-radius:6px; } */
   img {
-    max-width: 25%;
+    max-width: 100%;
     height: auto;
     display: block;
     border: 1px solid #ddd;
@@ -44,20 +44,19 @@
 </div>
 
 <script>
-  // microCMS 拡張フィールド通信（postMessage）仕様: https://document.microcms.io/manual/field-extension
   let iframeId = null;
-  const origin = location !== window.parent.location ? document.referrer : "*"; // microCMS側のオリジン
+  const origin = location !== window.parent.location ? document.referrer : "*";
 
   const $url = document.getElementById("url");
   const $img = document.getElementById("preview");
 
-  function setHeight(px) {
-    // window.parent.postMessage({ id: iframeId, action: 'MICROCMS_UPDATE_STYLE', message: { height: px, width: '100%' } }, origin);
+  function resizeToImage() {
+    const rect = document.body.getBoundingClientRect();
     window.parent.postMessage(
       {
         id: iframeId,
         action: "MICROCMS_UPDATE_STYLE",
-        message: { height: px, width: "25%" },
+        message: { height: rect.height + 20, width: "100%" },
       },
       origin
     );
@@ -77,28 +76,20 @@
   function render(val) {
     $url.value = val || "";
     $img.src = val || "";
-    // 画像読み込み後に高さを調整
-    // $img.onload = () => setHeight($img.getBoundingClientRect().height + 120);
-    $img.onload = () => setHeight($img.getBoundingClientRect().height + 160);
-    // setHeight(220);
-    setHeight(260);
+    $img.onload = () => resizeToImage();
+    resizeToImage();
   }
 
-  // 初期値受信
   window.addEventListener("message", (e) => {
     if (!e.data || !e.data.action) return;
+
     if (e.data.action === "MICROCMS_GET_DEFAULT_DATA") {
       iframeId = e.data.id;
       const current = (e.data.message && e.data.message.data) || "";
       render(current);
-      setHeight(260);
-    }
-    if (e.data.action === "MICROCMS_POST_DATA_SUCCESS") {
-      // 保存成功時の応答（必要なら何かする）
     }
   });
 
-  // 入力変更 → 値をmicroCMSへ送信
   $url.addEventListener("input", () => {
     const val = $url.value.trim();
     render(val);
