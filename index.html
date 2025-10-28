@@ -1,137 +1,107 @@
 <!DOCTYPE html>
-<html lang="ja">
-  <head>
-    <meta charset="utf-8" />
-    <title>Minimal LIFF Push (GitHub Pages)</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- LIFF SDK -->
-    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-    <style>
-      body {
-        font-family: system-ui, sans-serif;
-        padding: 16px;
-      }
-      button {
-        padding: 10px 16px;
-        margin: 6px 6px 6px 0;
-      }
-      #log {
-        white-space: pre-wrap;
-        background: #f7f7f7;
-        padding: 10px;
-        border-radius: 8px;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>Minimal LIFF Push</h1>
-    <div>
-      <button id="btnInit">LIFF init</button>
-      <button id="btnPush">Push via GAS</button>
-      <button id="btnLogout">Logout</button>
-    </div>
-    <h3>Log</h3>
-    <div id="log"></div>
+<meta charset="utf-8" />
+<title>Drive Image Preview (microCMS extension)</title>
+<style>
+  body {
+    font: 14px/1.6 system-ui, sans-serif;
+    margin: 12px;
+  }
+  .row {
+    display: grid;
+    gap: 8px;
+  }
+  input[type="text"] {
+    padding: 8px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  /* img{ max-width:100%; height:auto; display:block; border:1px solid #ddd; border-radius:6px; } */
+  img {
+    max-width: 25%;
+    height: auto;
+    display: block;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+  }
+  .hint {
+    color: #666;
+    font-size: 12px;
+  }
+</style>
 
-    <script>
-      // ========= 差し替えポイント =========
-      const LIFF_ID = "1660880261-zrokgWLA"; // 例: '1660880261-zrokgWLA'（開いているLIFFと一致必須）
-      const GAS_ENDPOINT =
-        "https://script.google.com/macros/s/AKfycbxFPWM7XlrsQP8v3ajJQGEZy13LqPd1xRUsEclLyB5uyI2mDSzNVxmQjGbwxV56Rr2fLA/exec"; // 例: 'https://script.google.com/macros/s/xxxxxxxx/exec'
-      // ====================================
+<div class="row">
+  <label>画像URL（https://lh3.googleusercontent.com/d/...）</label>
+  <input
+    id="url"
+    type="text"
+    placeholder="https://lh3.googleusercontent.com/d/xxxxxxxx"
+  />
+  <div class="hint">
+    Drive公開リンクを
+    <code>https://lh3.googleusercontent.com/d/FILE_ID</code> 形式にして入力
+  </div>
+  <img id="preview" alt="preview" />
+</div>
 
-      const log = (...args) => {
-        const el = document.getElementById("log");
-        el.textContent +=
-          args
-            .map((a) =>
-              typeof a === "string" ? a : JSON.stringify(a, null, 2)
-            )
-            .join(" ") + "\n";
-      };
+<script>
+  // microCMS 拡張フィールド通信（postMessage）仕様: https://document.microcms.io/manual/field-extension
+  let iframeId = null;
+  const origin = location !== window.parent.location ? document.referrer : "*"; // microCMS側のオリジン
 
-      async function ensureLoginWithScopes() {
-        // 1) init
-        await liff.init({ liffId: LIFF_ID });
+  const $url = document.getElementById("url");
+  const $img = document.getElementById("preview");
 
-        // 2) 未ログインなら必要スコープを要求してログイン
-        if (!liff.isLoggedIn()) {
-          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
-          return false; // リダイレクト→復帰後にもう一度呼ばれる想定
-        }
+  function setHeight(px) {
+    // window.parent.postMessage({ id: iframeId, action: 'MICROCMS_UPDATE_STYLE', message: { height: px, width: '100%' } }, origin);
+    window.parent.postMessage(
+      {
+        id: iframeId,
+        action: "MICROCMS_UPDATE_STYLE",
+        message: { height: px, width: "25%" },
+      },
+      origin
+    );
+  }
 
-        // 3) ログイン済みでも idToken が無ければ再同意を促す
-        const idToken = liff.getIDToken();
-        if (!idToken) {
-          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
-          return false;
-        }
+  function postValue(val) {
+    window.parent.postMessage(
+      {
+        id: iframeId,
+        action: "MICROCMS_POST_DATA",
+        message: { data: val },
+      },
+      origin
+    );
+  }
 
-        // 4) profile スコープの確認は getProfile を try して判定
-        try {
-          await liff.getProfile(); // 成功すれば profile スコープあり
-        } catch (_) {
-          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
-          return false;
-        }
-        return true;
-      }
+  function render(val) {
+    $url.value = val || "";
+    $img.src = val || "";
+    // 画像読み込み後に高さを調整
+    // $img.onload = () => setHeight($img.getBoundingClientRect().height + 120);
+    $img.onload = () => setHeight($img.getBoundingClientRect().height + 160);
+    // setHeight(220);
+    setHeight(260);
+  }
 
-      async function initLiff() {
-        log("href(before init):", location.href);
-        try {
-          const ready = await ensureLoginWithScopes();
-          if (!ready) return; // ログイン/同意で遷移→復帰後に再実行
-          log("LIFF ready (logged-in & scopes ok).");
-        } catch (e) {
-          log("init error:", e?.message || e);
-          alert("init error: " + (e?.message || e));
-        }
-      }
+  // 初期値受信
+  window.addEventListener("message", (e) => {
+    if (!e.data || !e.data.action) return;
+    if (e.data.action === "MICROCMS_GET_DEFAULT_DATA") {
+      iframeId = e.data.id;
+      const current = (e.data.message && e.data.message.data) || "";
+      render(current);
+      setHeight(260);
+    }
+    if (e.data.action === "MICROCMS_POST_DATA_SUCCESS") {
+      // 保存成功時の応答（必要なら何かする）
+    }
+  });
 
-      document.getElementById("btnInit").onclick = initLiff;
-
-      document.getElementById("btnPush").onclick = async () => {
-        try {
-          const ready = await ensureLoginWithScopes();
-          if (!ready) return;
-
-          const idToken = liff.getIDToken();
-          if (!idToken) {
-            alert("idToken not found");
-            return;
-          }
-
-          const text = "GAS経由のプッシュ送信テストだよ！";
-          const body = new URLSearchParams({
-            id_token: idToken,
-            text,
-          }).toString();
-
-          const res = await fetch(GAS_ENDPOINT, {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/x-www-form-urlencoded; charset=UTF-8",
-            },
-            body,
-          });
-
-          log("GAS status:", res.status, await res.text());
-          alert("GAS status: " + res.status);
-        } catch (e) {
-          log("push error:", e);
-          alert("push error: " + (e?.message || e));
-        }
-      };
-
-      document.getElementById("btnLogout").onclick = () => {
-        liff.logout();
-        location.reload();
-      };
-
-      // 復帰時に自動初期化
-      window.addEventListener("load", initLiff);
-    </script>
-  </body>
-</html>
+  // 入力変更 → 値をmicroCMSへ送信
+  $url.addEventListener("input", () => {
+    const val = $url.value.trim();
+    render(val);
+    postValue(val);
+  });
+</script>
