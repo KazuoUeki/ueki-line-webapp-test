@@ -75,7 +75,17 @@
 
   function render(val) {
     $url.value = val || "";
-    $img.src = val || "";
+
+    if (!val) {
+      $img.style.display = "none";
+      $img.removeAttribute("src");
+      resizeToImage();
+      return;
+    }
+
+    $img.style.display = "block";
+    $img.src = val;
+
     $img.onload = () => resizeToImage();
     resizeToImage();
   }
