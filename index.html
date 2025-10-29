@@ -1,108 +1,137 @@
 <!DOCTYPE html>
-<meta charset="utf-8" />
-<title>Drive Image Preview (microCMS extension)</title>
-<style>
-  body {
-    font: 14px/1.6 system-ui, sans-serif;
-    margin: 12px;
-    overflow: hidden; /* スクロールバー抑止 */
-  }
-  .row {
-    display: grid;
-    gap: 8px;
-  }
-  input[type="text"] {
-    padding: 8px;
-    width: 100%;
-    box-sizing: border-box;
-  }
-  img {
-    width: 25%;
-    height: auto;
-    display: block;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-  }
-  .hint {
-    color: #666;
-    font-size: 12px;
-  }
-</style>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Minimal LIFF Push (GitHub Pages)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- LIFF SDK -->
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        padding: 16px;
+      }
+      button {
+        padding: 10px 16px;
+        margin: 6px 6px 6px 0;
+      }
+      #log {
+        white-space: pre-wrap;
+        background: #f7f7f7;
+        padding: 10px;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Minimal LIFF Push</h1>
+    <div>
+      <button id="btnInit">LIFF init</button>
+      <button id="btnPush">Push via GAS</button>
+      <button id="btnLogout">Logout</button>
+    </div>
+    <h3>Log</h3>
+    <div id="log"></div>
 
-<div class="row">
-  <label>画像URL（https://lh3.googleusercontent.com/d/...）</label>
-  <input
-    id="url"
-    type="text"
-    placeholder="https://lh3.googleusercontent.com/d/xxxxxxxx"
-  />
-  <div class="hint">
-    Drive公開リンクを
-    <code>https://lh3.googleusercontent.com/d/FILE_ID</code> 形式にして入力
-  </div>
-  <img id="preview" alt="preview" />
-</div>
+    <script>
+      // ========= 差し替えポイント =========
+      const LIFF_ID = "1660880261-zrokgWLA"; // 例: '1660880261-zrokgWLA'（開いているLIFFと一致必須）
+      const GAS_ENDPOINT =
+        "https://script.google.com/macros/s/AKfycbxFPWM7XlrsQP8v3ajJQGEZy13LqPd1xRUsEclLyB5uyI2mDSzNVxmQjGbwxV56Rr2fLA/exec"; // 例: 'https://script.google.com/macros/s/xxxxxxxx/exec'
+      // ====================================
 
-<script>
-  let iframeId = null;
-  const origin = location !== window.parent.location ? document.referrer : "*";
+      const log = (...args) => {
+        const el = document.getElementById("log");
+        el.textContent +=
+          args
+            .map((a) =>
+              typeof a === "string" ? a : JSON.stringify(a, null, 2)
+            )
+            .join(" ") + "\n";
+      };
 
-  const $url = document.getElementById("url");
-  const $img = document.getElementById("preview");
+      async function ensureLoginWithScopes() {
+        // 1) init
+        await liff.init({ liffId: LIFF_ID });
 
-  function resizeToImage() {
-    const rect = document.body.getBoundingClientRect();
-    window.parent.postMessage(
-      {
-        id: iframeId,
-        action: "MICROCMS_UPDATE_STYLE",
-        message: { height: rect.height + 20, width: "100%" },
-      },
-      origin
-    );
-  }
+        // 2) 未ログインなら必要スコープを要求してログイン
+        if (!liff.isLoggedIn()) {
+          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
+          return false; // リダイレクト→復帰後にもう一度呼ばれる想定
+        }
 
-  function postValue(val) {
-    window.parent.postMessage(
-      {
-        id: iframeId,
-        action: "MICROCMS_POST_DATA",
-        message: { data: val },
-      },
-      origin
-    );
-  }
+        // 3) ログイン済みでも idToken が無ければ再同意を促す
+        const idToken = liff.getIDToken();
+        if (!idToken) {
+          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
+          return false;
+        }
 
-  function render(val) {
-    $url.value = val || "";
+        // 4) profile スコープの確認は getProfile を try して判定
+        try {
+          await liff.getProfile(); // 成功すれば profile スコープあり
+        } catch (_) {
+          await liff.login({ scope: ["profile", "openid"], prompt: "consent" });
+          return false;
+        }
+        return true;
+      }
 
-    if (!val) {
-      $img.style.display = "none";
-      $img.removeAttribute("src");
-      resizeToImage();
-      return;
-    }
+      async function initLiff() {
+        log("href(before init):", location.href);
+        try {
+          const ready = await ensureLoginWithScopes();
+          if (!ready) return; // ログイン/同意で遷移→復帰後に再実行
+          log("LIFF ready (logged-in & scopes ok).");
+        } catch (e) {
+          log("init error:", e?.message || e);
+          alert("init error: " + (e?.message || e));
+        }
+      }
 
-    $img.style.display = "block";
-    $img.src = val;
+      document.getElementById("btnInit").onclick = initLiff;
 
-    $img.onload = () => resizeToImage();
-    resizeToImage();
-  }
+      document.getElementById("btnPush").onclick = async () => {
+        try {
+          const ready = await ensureLoginWithScopes();
+          if (!ready) return;
 
-  window.addEventListener("message", (e) => {
-    if (!e.data || !e.data.action) return;
+          const idToken = liff.getIDToken();
+          if (!idToken) {
+            alert("idToken not found");
+            return;
+          }
 
-    if (e.data.action === "MICROCMS_GET_DEFAULT_DATA") {
-      iframeId = e.data.id;
-      const current = (e.data.message && e.data.message.data) || "";
-      render(current);
-    }
-  });
+          const text = "GAS経由のプッシュ送信テストだよ！";
+          const body = new URLSearchParams({
+            id_token: idToken,
+            text,
+          }).toString();
 
-  $url.addEventListener("input", () => {
-    const val = $url.value.trim();
-    render(val);
-    postValue(val);
-  });
-</script>
+          const res = await fetch(GAS_ENDPOINT, {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/x-www-form-urlencoded; charset=UTF-8",
+            },
+            body,
+          });
+
+          log("GAS status:", res.status, await res.text());
+          alert("GAS status: " + res.status);
+        } catch (e) {
+          log("push error:", e);
+          alert("push error: " + (e?.message || e));
+        }
+      };
+
+      document.getElementById("btnLogout").onclick = () => {
+        liff.logout();
+        location.reload();
+      };
+
+      // 復帰時に自動初期化
+      window.addEventListener("load", initLiff);
+    </script>
+  </body>
+</html>
